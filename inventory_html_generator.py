@@ -366,6 +366,24 @@ class AdvancedHTMLGeneratorApp:
             messagebox.showerror("인증 실패", "관리자 비밀번호가 일치하지 않습니다.")
             return False
 
+        result = self._build_report_html()
+        if result is None:
+            return False
+        html_content, random_user_pwd, download_dir = result
+
+        html_path = os.path.join(
+            download_dir, f"inventory_eda_dashboard_{datetime.date.today().strftime('%Y%m%d')}.html"
+        )
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+
+        self._show_result_dialog(html_path, random_user_pwd)
+        return True
+
+    def _build_report_html(self, forced_user_pwd=None):
+        """엑셀 데이터를 모아 완전한 단일 HTML 리포트 문자열을 만듭니다 (파일로 쓰지는 않음).
+        generate_html_report()(개별 파일 저장)와 통합 리포트 빌더(unified_report_generator.py)
+        양쪽에서 재사용합니다. 실패 시 None을 반환합니다."""
         download_dir = self.path_var.get().strip()
         if not os.path.exists(download_dir):
             download_dir = os.getcwd()
@@ -376,12 +394,12 @@ class AdvancedHTMLGeneratorApp:
             target_wb = self._find_target_workbook(excel)
             if not target_wb:
                 messagebox.showerror("오류", f"현재 엑셀에서 '{TARGET_WORKBOOK_KEYWORD}.xlsx' 파일이 열려있지 않습니다.")
-                return False
+                return None
 
             ws = target_wb.Sheets("현황정리")
             # 암호학적으로 안전한 난수 생성기(secrets)를 사용합니다.
             alphabet = string.ascii_letters + string.digits
-            random_user_pwd = ''.join(secrets.choice(alphabet) for _ in range(8))
+            random_user_pwd = forced_user_pwd or ''.join(secrets.choice(alphabet) for _ in range(8))
 
             valid_branches = ['중앙지사', '강북지사', '서대문지사', '고양지사', '의정부지사',
                                '남양주지사', '강릉지사', '원주지사', '합계']
@@ -435,18 +453,11 @@ class AdvancedHTMLGeneratorApp:
                 monthly_totals, branch_monthly, quarter_labels, branch_quarterly, hq_quarterly, raw_eda
             )
 
-            html_path = os.path.join(
-                download_dir, f"inventory_eda_dashboard_{datetime.date.today().strftime('%Y%m%d')}.html"
-            )
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
-
-            self._show_result_dialog(html_path, random_user_pwd)
-            return True
+            return html_content, random_user_pwd, download_dir
 
         except Exception as e:
             messagebox.showerror("실행 오류", f"보고서 생성 중 오류 발생:\n{e}")
-            return False
+            return None
         finally:
             excel = None  # COM 참조 해제 (읽기 전용 세션이라 Quit는 호출하지 않음: 사용자의 열린 엑셀을 닫지 않기 위함)
 
@@ -517,6 +528,7 @@ class AdvancedHTMLGeneratorApp:
     <meta charset="UTF-8">
     <title>'26년도 강북 / 강원본부 물품재고 현황 리포트</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels"></script>
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" rel="stylesheet">
     <style>
@@ -638,8 +650,8 @@ class AdvancedHTMLGeneratorApp:
         .review-list li {{ font-size: 9.6pt; line-height: 1.5; color: #33415c; display: flex; gap: 8px; align-items: flex-start; }}
         .review-list li .badge {{ flex-shrink: 0; font-size: 10pt; }}
         .review-list li b {{ color: var(--navy); }}
-        .review-list li.tone-warn b {{ color: #b42318; }}
-        .review-list li.tone-good b {{ color: #0f9d58; }}
+        .review-list li.tone-warn b {{ color: #d03b3b; }}
+        .review-list li.tone-good b {{ color: #0ca30c; }}
 
         /* ---- 지사별 증감률 랭킹 ---- */
         .rank-list {{ display: flex; flex-direction: column; gap: 10px; }}
@@ -675,7 +687,7 @@ class AdvancedHTMLGeneratorApp:
         tbody tr:last-child td {{ border-bottom: none; }}
         tr:hover td {{ background-color: #f5f8ff; transition: background 0.15s; }}
         .total-row td {{ background-color: #e8edfb !important; font-weight: 800; color: var(--navy); }}
-        .sluggish-row td {{ background-color: #fef1f1 !important; color: #b42318; font-weight: 600; }}
+        .sluggish-row td {{ background-color: #fef1f1 !important; color: #d03b3b; font-weight: 600; }}
         .footer {{
             text-align: right; font-size: 8.8pt; color: var(--slate); border-top: 1px solid var(--card-border);
             padding-top: 18px; margin-top: 36px; font-weight: 500;
@@ -798,11 +810,17 @@ class AdvancedHTMLGeneratorApp:
 """
 
     def _build_chart_section(self):
+        # 금액(천원)과 달성율(%)은 단위가 달라 두 축을 한 차트에 억지로 겹치면(듀얼 축) 왜곡되어
+        # 보이므로 별도 차트로 분리합니다 (축 1개 원칙).
         body = """
         <div class="chart-grid">
             <div class="chart-card">
-                <h3>📊 지사별 재고 합계금액 vs 목표금액 vs 달성율 (EDA Combo Chart)</h3>
+                <h3>📊 지사별 재고 합계금액 vs 목표금액</h3>
                 <div class="chart-canvas-wrap"><canvas id="amountBarChart"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>🎯 지사별 달성율</h3>
+                <div class="chart-canvas-wrap"><canvas id="achieveRateChart"></canvas></div>
             </div>
             <div class="chart-card">
                 <h3>📈 지사별 월별 이동 재고 수량 추이 (범례 클릭 시 본부합계 표시)</h3>
@@ -838,7 +856,7 @@ class AdvancedHTMLGeneratorApp:
         for name, pct, last_v in rows:
             is_up = pct >= 0
             bar_pct = min(abs(pct) / max_abs * 100, 100)
-            color = "#0f9d58" if is_up else "#dc2626"
+            color = "#0ca30c" if is_up else "#d03b3b"
             arrow = "▲" if is_up else "▼"
             items_html.append(f"""
                 <div class="rank-row">
@@ -954,7 +972,7 @@ class AdvancedHTMLGeneratorApp:
         qoq_badge = ""
         if len(hq_quarterly) >= 2 and hq_quarterly[-2]:
             qoq = (hq_quarterly[-1] - hq_quarterly[-2]) / hq_quarterly[-2] * 100
-            tone_color = "#0f9d58" if qoq >= 0 else "#dc2626"
+            tone_color = "#0ca30c" if qoq >= 0 else "#d03b3b"
             arrow = "▲" if qoq >= 0 else "▼"
             qoq_badge = (
                 f'<div style="margin-bottom:14px; font-size:9.6pt; font-weight:700; color:{tone_color};">'
@@ -1388,8 +1406,9 @@ class AdvancedHTMLGeneratorApp:
                         monthly_totals, branch_monthly, quarter_labels, branch_quarterly, hq_quarterly,
                         raw_eda):
         # json.dumps로 안전하게 JS 배열/리터럴 생성 (따옴표 등 특수문자 대응)
-        branch_palette = ['#2563eb', '#f97316', '#10b981', '#a855f7', '#ef4444',
-                           '#06b6d4', '#eab308', '#ec4899', '#6366f1', '#84cc16']
+        # 색맹 안전성 검증된 순서 고정 카테고리 팔레트 (blue-orange-aqua-yellow-magenta-green-violet-red)
+        branch_palette = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100',
+                           '#e87ba4', '#008300', '#4a3aa7', '#e34948']
         branch_line_datasets = []
         for i, (name, values) in enumerate(branch_monthly.items()):
             color = branch_palette[i % len(branch_palette)]
@@ -1452,6 +1471,11 @@ class AdvancedHTMLGeneratorApp:
     <script>
         Chart.defaults.font.family = "'Pretendard', 'Malgun Gothic', 'Segoe UI', sans-serif";
         Chart.defaults.color = '#475569';
+        // 직접 라벨은 선택된 핵심 차트에서만 켭니다 (모든 점에 숫자를 찍지 않음).
+        if (window.ChartDataLabels) {{
+            Chart.register(ChartDataLabels);
+            Chart.defaults.set('plugins.datalabels', {{ display: false }});
+        }}
 
         function initCharts() {{
             const ctxBar = document.getElementById('amountBarChart').getContext('2d');
@@ -1469,8 +1493,7 @@ class AdvancedHTMLGeneratorApp:
                             data: {json.dumps(chart_actual_amt)},
                             backgroundColor: barGradient,
                             borderRadius: 6,
-                            borderSkipped: false,
-                            yAxisID: 'yAmount'
+                            borderSkipped: false
                         }},
                         {{
                             type: 'bar',
@@ -1478,22 +1501,7 @@ class AdvancedHTMLGeneratorApp:
                             data: {json.dumps(chart_target_amt)},
                             backgroundColor: 'rgba(203, 213, 225, 0.55)',
                             borderRadius: 6,
-                            borderSkipped: false,
-                            yAxisID: 'yAmount'
-                        }},
-                        {{
-                            type: 'line',
-                            label: '달성율(%)',
-                            data: {json.dumps(chart_achieve_rate)},
-                            yAxisID: 'yRate',
-                            borderColor: '#f59e0b',
-                            backgroundColor: '#f59e0b',
-                            borderWidth: 2.5,
-                            tension: 0.35,
-                            pointRadius: 4,
-                            pointBackgroundColor: '#f59e0b',
-                            pointBorderColor: '#fff',
-                            pointBorderWidth: 1.5
+                            borderSkipped: false
                         }}
                     ]
                 }},
@@ -1512,31 +1520,65 @@ class AdvancedHTMLGeneratorApp:
                             padding: 10,
                             cornerRadius: 8,
                             callbacks: {{
-                                label: function(ctx) {{
-                                    if (ctx.dataset.yAxisID === 'yRate') return ' ' + ctx.dataset.label + ': ' + ctx.parsed.y + '%';
-                                    return ' ' + ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString() + '천원';
-                                }}
+                                label: ctx => ' ' + ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString() + '천원'
                             }}
                         }}
                     }},
                     scales: {{
-                        yAmount: {{
+                        y: {{
                             beginAtZero: true,
-                            position: 'left',
                             grid: {{ color: 'rgba(148,163,184,0.15)' }},
                             title: {{ display: true, text: '금액(천원)', font: {{ size: 10 }}, padding: {{ bottom: 6 }} }}
-                        }},
-                        yRate: {{
-                            beginAtZero: true,
-                            position: 'right',
-                            grid: {{ drawOnChartArea: false }},
-                            ticks: {{ callback: v => v + '%' }},
-                            title: {{ display: true, text: '달성율(%)', font: {{ size: 10 }}, padding: {{ bottom: 6 }} }}
                         }},
                         x: {{ grid: {{ display: false }} }}
                     }}
                 }}
             }});
+
+            // 금액(천원)과 달성율(%)은 단위가 달라 억지로 한 차트/듀얼 축에 겹치지 않고 별도 차트로 분리했습니다.
+            // 핵심 지표라 막대 위에 직접 값을 라벨로 표시합니다 (호버 없이도 바로 읽힘).
+            const achieveCanvas = document.getElementById('achieveRateChart');
+            if (achieveCanvas) {{
+                new Chart(achieveCanvas.getContext('2d'), {{
+                    type: 'bar',
+                    data: {{
+                        labels: {json.dumps(chart_branches, ensure_ascii=False)},
+                        datasets: [{{
+                            label: '달성율(%)',
+                            data: {json.dumps(chart_achieve_rate)},
+                            backgroundColor: '#eb6834',
+                            borderRadius: 6,
+                            borderSkipped: false
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        layout: {{ padding: {{ top: 24 }} }},
+                        plugins: {{
+                            legend: {{ display: false }},
+                            tooltip: {{
+                                backgroundColor: '#0f172a', padding: 10, cornerRadius: 8,
+                                callbacks: {{ label: ctx => ' ' + ctx.dataset.label + ': ' + ctx.parsed.y + '%' }}
+                            }},
+                            datalabels: {{
+                                display: true, anchor: 'end', align: 'top', offset: 2,
+                                color: '#33415c', font: {{ size: 9.5, weight: '700' }},
+                                formatter: v => v + '%'
+                            }}
+                        }},
+                        scales: {{
+                            y: {{
+                                beginAtZero: true,
+                                grid: {{ color: 'rgba(148,163,184,0.15)' }},
+                                ticks: {{ callback: v => v + '%' }},
+                                title: {{ display: true, text: '달성율(%)', font: {{ size: 10 }}, padding: {{ bottom: 6 }} }}
+                            }},
+                            x: {{ grid: {{ display: false }} }}
+                        }}
+                    }}
+                }});
+            }}
 
             const ctxLine = document.getElementById('trendLineChart').getContext('2d');
 
@@ -1687,8 +1729,8 @@ class AdvancedHTMLGeneratorApp:
         const RAW_REQ_TYPES = {raw_req_types_js};
         const RAW_MONTH_ORDER = {raw_month_order_js};
         const RAW_REQ_TYPE_TOTALS = {raw_req_type_totals_js};
-        const RAW_TYPE_PALETTE = ['#2563eb', '#f97316', '#10b981', '#a855f7', '#ef4444',
-                                   '#06b6d4', '#eab308', '#ec4899', '#6366f1', '#84cc16'];
+        const RAW_TYPE_PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100',
+                                   '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
 
         function buildTypeStatusData(branch) {{
             const src = (RAW_EDA_DATA.typeStatus && RAW_EDA_DATA.typeStatus[branch]) || {{}};

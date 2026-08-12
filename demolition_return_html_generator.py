@@ -317,6 +317,24 @@ class DemolitionReturnApp:
             messagebox.showerror("인증 실패", "관리자 비밀번호가 일치하지 않습니다.")
             return False
 
+        result = self._build_report_html()
+        if result is None:
+            return False
+        html_content, random_user_pwd, download_dir = result
+
+        html_path = os.path.join(
+            download_dir, f"demolition_return_dashboard_{datetime.date.today().strftime('%Y%m%d')}.html"
+        )
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+
+        self._show_result_dialog(html_path, random_user_pwd)
+        return True
+
+    def _build_report_html(self, forced_user_pwd=None):
+        """엑셀 데이터를 모아 완전한 단일 HTML 리포트 문자열을 만듭니다 (파일로 쓰지는 않음).
+        generate_html_report()(개별 파일 저장)와 통합 리포트 빌더(unified_report_generator.py)
+        양쪽에서 재사용합니다. 실패 시 None을 반환합니다."""
         download_dir = self.path_var.get().strip()
         if not os.path.exists(download_dir):
             download_dir = os.getcwd()
@@ -327,11 +345,11 @@ class DemolitionReturnApp:
             target_wb = self._find_target_workbook(excel)
             if not target_wb:
                 messagebox.showerror("오류", f"현재 엑셀에서 '{TARGET_WORKBOOK_KEYWORD}.xlsx' 파일이 열려있지 않습니다.")
-                return False
+                return None
 
             ws = target_wb.Sheets("정리")
             alphabet = string.ascii_letters + string.digits
-            random_user_pwd = ''.join(secrets.choice(alphabet) for _ in range(8))
+            random_user_pwd = forced_user_pwd or ''.join(secrets.choice(alphabet) for _ in range(8))
 
             # 정리 시트 레이아웃(스크린샷 기준):
             #   본부별 표: 헤더 6~7행, 데이터 8~13행(6개 본부), 합계 14행 -> B~O열(14개 컬럼)
@@ -345,7 +363,7 @@ class DemolitionReturnApp:
                     "'정리' 시트에서 본부별/지사별 표를 찾지 못했습니다.\n"
                     "시트 레이아웃이 예상과 다른 것 같습니다 (본부별 8~14행, 지사별 19~27행 기준)."
                 )
-                return False
+                return None
 
             eda = self._collect_return_eda(target_wb, BRANCH_NAMES)
 
@@ -362,18 +380,11 @@ class DemolitionReturnApp:
             html_content += self._build_footer(random_user_pwd)
             html_content += self._build_scripts(branch_rows, eda)
 
-            html_path = os.path.join(
-                download_dir, f"demolition_return_dashboard_{datetime.date.today().strftime('%Y%m%d')}.html"
-            )
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
-
-            self._show_result_dialog(html_path, random_user_pwd)
-            return True
+            return html_content, random_user_pwd, download_dir
 
         except Exception as e:
             messagebox.showerror("실행 오류", f"보고서 생성 중 오류 발생:\n{e}")
-            return False
+            return None
         finally:
             excel = None  # 읽기 전용 세션이라 Quit는 호출하지 않음 (사용자의 열린 엑셀을 닫지 않기 위함)
 
@@ -629,19 +640,20 @@ class DemolitionReturnApp:
         return None
 
     def _diverging_style(self, value, vmin, vmax):
-        """반납율처럼 '높을수록 좋은' 지표에 빨강(낮음)-흰색(중간)-파랑(높음) 색상 스케일을 적용합니다.
-        (엑셀 조건부서식 3색 스케일과 동일한 느낌)"""
+        """반납율처럼 '높을수록 좋은' 지표에 빨강(낮음)-중립회색(중간)-파랑(높음) 색상 스케일을 적용합니다.
+        (엑셀 조건부서식 3색 스케일과 동일한 느낌. 중간값을 순백 대신 중립 회색으로 둬야
+        "중간"이 실제로 '값 없음/중립'처럼 읽힙니다.)"""
         if vmax == vmin or value is None:
             return ""
         ratio = max(0.0, min(1.0, (value - vmin) / (vmax - vmin)))
         if ratio < 0.5:
             t = ratio / 0.5
-            r, g, b = 239, 68, 68
-            r2, g2, b2 = 255, 255, 255
+            r, g, b = 227, 73, 72       # red #e34948
+            r2, g2, b2 = 240, 239, 236  # neutral gray #f0efec
         else:
             t = (ratio - 0.5) / 0.5
-            r, g, b = 255, 255, 255
-            r2, g2, b2 = 37, 99, 235
+            r, g, b = 240, 239, 236     # neutral gray #f0efec
+            r2, g2, b2 = 42, 120, 214   # blue #2a78d6
         rr = round(r + (r2 - r) * t)
         gg = round(g + (g2 - g) * t)
         bb = round(b + (b2 - b) * t)
@@ -684,6 +696,7 @@ class DemolitionReturnApp:
     <meta charset="UTF-8">
     <title>'26년도 강북 / 강원본부 해지고객 장비 반납 현황 리포트</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels"></script>
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" rel="stylesheet">
     <style>
@@ -765,8 +778,8 @@ class DemolitionReturnApp:
         .review-list li {{ font-size: 9.6pt; line-height: 1.5; color: #33415c; display: flex; gap: 8px; align-items: flex-start; }}
         .review-list li .badge {{ flex-shrink: 0; font-size: 10pt; }}
         .review-list li b {{ color: var(--navy); }}
-        .review-list li.tone-warn b {{ color: #b42318; }}
-        .review-list li.tone-good b {{ color: #0f9d58; }}
+        .review-list li.tone-warn b {{ color: #d03b3b; }}
+        .review-list li.tone-good b {{ color: #0ca30c; }}
 
         .eda-tabs {{ display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }}
         .eda-tab-btn {{
@@ -785,9 +798,9 @@ class DemolitionReturnApp:
         tr:hover td {{ background-color: rgba(245,248,255,0.6); }}
         .total-row td {{ background-color: #e8edfb !important; font-weight: 800; color: var(--navy); }}
         .bottom-row td {{ background-color: #fef2f2; }}
-        .bottom-row td:first-child {{ font-weight: 700; color: #b42318; }}
+        .bottom-row td:first-child {{ font-weight: 700; color: #d03b3b; }}
         .bottom-badge {{
-            display: inline-block; font-size: 7.3pt; font-weight: 700; color: #b42318; background: #fee2e2;
+            display: inline-block; font-size: 7.3pt; font-weight: 700; color: #d03b3b; background: #fee2e2;
             padding: 1px 6px; border-radius: 999px; margin-left: 4px; vertical-align: middle;
         }}
         .rank-caption {{ font-size: 8.3pt; color: var(--slate); }}
@@ -1155,6 +1168,11 @@ class DemolitionReturnApp:
     <script>
         Chart.defaults.font.family = "'Pretendard', 'Malgun Gothic', 'Segoe UI', sans-serif";
         Chart.defaults.color = '#475569';
+        // 직접 라벨은 선택된 핵심 차트에서만 켭니다 (모든 점에 숫자를 찍지 않음).
+        if (window.ChartDataLabels) {{
+            Chart.register(ChartDataLabels);
+            Chart.defaults.set('plugins.datalabels', {{ display: false }});
+        }}
 
         const EDA_STATUS_BY_BRANCH = {json.dumps(status_by_branch, ensure_ascii=False)};
         const EDA_MONTH_BY_BRANCH = {json.dumps(month_by_branch, ensure_ascii=False)};
@@ -1182,12 +1200,25 @@ class DemolitionReturnApp:
                 data: {{
                     labels: {json.dumps(labels, ensure_ascii=False)},
                     datasets: [
-                        {{ label: '8월 반납율(%)', data: {json.dumps(rate_aug)}, backgroundColor: 'rgba(148,163,184,0.6)', borderRadius: 5 }},
-                        {{ label: '26년 누계 반납율(%)', data: {json.dumps(rate_cum)}, backgroundColor: '#2563eb', borderRadius: 5 }}
+                        {{
+                            label: '8월 반납율(%)', data: {json.dumps(rate_aug)},
+                            backgroundColor: 'rgba(148,163,184,0.6)', borderRadius: 5
+                        }},
+                        {{
+                            label: '26년 누계 반납율(%)', data: {json.dumps(rate_cum)},
+                            backgroundColor: '#2a78d6', borderRadius: 5,
+                            // 핵심 지표(누계 반납율)만 막대 위에 직접 라벨을 표시합니다.
+                            datalabels: {{
+                                display: true, anchor: 'end', align: 'top', offset: 2,
+                                color: '#33415c', font: {{ size: 9, weight: '700' }},
+                                formatter: v => v + '%'
+                            }}
+                        }}
                     ]
                 }},
                 options: {{
                     responsive: true, maintainAspectRatio: false,
+                    layout: {{ padding: {{ top: 18 }} }},
                     plugins: {{
                         legend: {{ position: 'top', align: 'center', labels: {{ usePointStyle: true, boxWidth: 8, padding: 14, font: {{ size: 9.5 }} }} }},
                         tooltip: {{

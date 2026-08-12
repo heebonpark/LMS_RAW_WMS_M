@@ -13,6 +13,7 @@ import pythoncom
 # 기존 모듈 임포트
 import inventory_html_generator as inv
 import demolition_return_html_generator as dem
+import unified_report_generator
 
 class UnifiedDashboardApp:
     def __init__(self, root):
@@ -110,6 +111,63 @@ class UnifiedDashboardApp:
         self.log(f"=== 작업 실패: {reason} ===")
         self._show_warn("실패", f"{reason}\n진행 상황 로그에서 자세한 오류 내용을 확인하세요.")
 
+    def _show_unified_result(self, html_path, shared_pwd):
+        # 워커 스레드에서 호출되므로 Toplevel 생성은 반드시 메인 스레드로 위임합니다.
+        self.root.after(0, self._show_unified_result_on_main, html_path, shared_pwd)
+
+    def _show_unified_result_on_main(self, html_path, shared_pwd):
+        dlg = tk.Toplevel(self.root)
+        dlg.title("통합 리포트 생성 완료")
+        dlg.configure(bg="#0f172a")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        frame = tk.Frame(dlg, bg="#0f172a")
+        frame.pack(fill="both", expand=True, padx=24, pady=20)
+
+        tk.Label(frame, text="🎉 통합 리포트 생성 완료!", font=("Malgun Gothic", 12, "bold"),
+                 bg="#0f172a", fg="white").pack(anchor="w", pady=(0, 4))
+        tk.Label(frame, text="물품재고 현황 + 해지고객 장비 반납 현황, 파일 1개 · 암호 1개",
+                 font=("Malgun Gothic", 9), bg="#0f172a", fg="#94a3b8").pack(anchor="w", pady=(0, 12))
+
+        tk.Label(frame, text="저장 경로", font=("Malgun Gothic", 9, "bold"),
+                 bg="#0f172a", fg="#94a3b8").pack(anchor="w")
+        path_entry = tk.Entry(frame, font=("Malgun Gothic", 9), bg="#1e293b", fg="#e2e8f0",
+                               insertbackground="white", relief="flat")
+        path_entry.insert(0, html_path)
+        path_entry.configure(state="readonly", readonlybackground="#1e293b")
+        path_entry.pack(fill="x", ipady=6, pady=(2, 14))
+
+        tk.Label(frame, text="🔑 공유 암호 (물품재고 · 해지고객 장비반납 공통, 복사 후 붙여넣기 가능)",
+                 font=("Malgun Gothic", 9, "bold"), bg="#0f172a", fg="#94a3b8").pack(anchor="w")
+
+        pwd_row = tk.Frame(frame, bg="#0f172a")
+        pwd_row.pack(fill="x", pady=(2, 4))
+
+        pwd_entry = tk.Entry(pwd_row, font=("Malgun Gothic", 11, "bold"), bg="#1e293b", fg="#38bdf8",
+                              insertbackground="white", relief="flat", justify="center")
+        pwd_entry.insert(0, shared_pwd)
+        pwd_entry.configure(state="readonly", readonlybackground="#1e293b")
+        pwd_entry.pack(side="left", fill="x", expand=True, ipady=8)
+
+        def copy_pwd():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(shared_pwd)
+            self.root.update()
+            copy_btn.configure(text="✅ 복사됨")
+            dlg.after(1500, lambda: copy_btn.configure(text="📋 복사"))
+
+        copy_btn = tk.Button(pwd_row, text="📋 복사", command=copy_pwd, font=("Malgun Gothic", 9, "bold"),
+                              bg="#3b82f6", fg="white", activebackground="#2563eb", relief="flat", cursor="hand2")
+        copy_btn.pack(side="left", padx=(8, 0), ipady=6, ipadx=6)
+
+        tk.Label(frame, text=f"⏳ 조회 만료 기한: {getattr(self.inv_app, 'expiry_str', '')} (당월 말일)",
+                 font=("Malgun Gothic", 9), bg="#0f172a", fg="#cbd5e1").pack(anchor="w", pady=(14, 16))
+
+        tk.Button(frame, text="확인", command=dlg.destroy, font=("Malgun Gothic", 10, "bold"),
+                  bg="#10b981", fg="white", activebackground="#059669", relief="flat",
+                  cursor="hand2").pack(fill="x", ipady=8)
+
     def sync_paths(self):
         # 입력된 경로를 하위 앱들에 동기화 (스레드 시작 전, 메인 스레드에서 호출해야 함)
         path = self.path_var.get()
@@ -179,23 +237,22 @@ class UnifiedDashboardApp:
             self._fail("이동재고 1단계(RAW 반영)에서 실패했습니다.")
             return
 
-        self.log(">> 이동재고 2단계 (보고서 생성) 실행 중...")
-        if not self.inv_app.generate_html_report():
-            self._fail("이동재고 2단계(보고서 생성)에서 실패했습니다.")
-            return
-
         self.log(">> 철거반납 1단계 (RAW 반영) 실행 중...")
         if not self.dem_app.run_sync():
             self._fail("철거반납 1단계(RAW 반영)에서 실패했습니다.")
             return
 
-        self.log(">> 철거반납 2단계 (보고서 생성) 실행 중...")
-        if not self.dem_app.generate_html_report():
-            self._fail("철거반납 2단계(보고서 생성)에서 실패했습니다.")
+        self.log(">> 통합 리포트 생성 중 (물품재고 + 해지고객 장비반납, 공유 암호 1개)...")
+        result = unified_report_generator.build_unified_report(
+            self.inv_app, self.dem_app, self.path_var.get().strip()
+        )
+        if result is None:
+            self._fail("통합 리포트 생성에 실패했습니다.")
             return
+        html_path, shared_pwd = result
 
-        self.log("=== 모든 작업이 성공적으로 완료되었습니다 ===")
-        self._show_info("완료", "모든 작업이 완료되었습니다.\n상세 내용은 진행 상황 로그를 확인하세요.")
+        self.log(f"=== 통합 리포트 생성 완료: {html_path} ===")
+        self._show_unified_result(html_path, shared_pwd)
 
     def run_all(self):
         self.sync_paths()
