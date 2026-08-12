@@ -123,7 +123,7 @@ class DemolitionReturnApp:
                 "다운로드 경로에서 '입고현황'이 포함된 엑셀 파일을 찾을 수 없습니다.\n"
                 "WMS에서 전체데이터다운로드한 파일이 이 폴더에 있는지 확인해 주세요."
             )
-            return
+            return False
         src_path = max(candidates, key=os.path.getmtime)
 
         excel = None
@@ -131,7 +131,7 @@ class DemolitionReturnApp:
             df = pd.read_excel(src_path, sheet_name=0)
             if df.empty or df.shape[1] == 0:
                 messagebox.showerror("오류", "다운로드한 파일에 데이터가 없습니다.")
-                return
+                return False
 
             col_a_name = df.columns[0]
             col_a_str = df[col_a_name].astype(str).str.strip()
@@ -146,7 +146,7 @@ class DemolitionReturnApp:
             target_wb = self._find_target_workbook(excel)
             if not target_wb:
                 messagebox.showerror("오류", f"현재 엑셀에서 '{TARGET_WORKBOOK_KEYWORD}.xlsx' 파일이 열려있지 않습니다.")
-                return
+                return False
 
             warnings = []
             self._paste_dataframe(target_wb, "R_지역본부", df_hq, warnings)
@@ -166,8 +166,10 @@ class DemolitionReturnApp:
             if warnings:
                 msg += "\n\n⚠️ 일부 경고:\n" + "\n".join(warnings)
             messagebox.showinfo("성공", msg)
+            return True
         except Exception as e:
             messagebox.showerror("실행 오류", f"처리 중 오류 발생:\n{e}")
+            return False
         finally:
             if excel is not None:
                 try:
@@ -313,7 +315,7 @@ class DemolitionReturnApp:
         pwd = simpledialog.askstring("관리자 인증", "관리자 비밀번호를 입력하세요:", show="*")
         if pwd != ADMIN_PASSWORD:
             messagebox.showerror("인증 실패", "관리자 비밀번호가 일치하지 않습니다.")
-            return
+            return False
 
         download_dir = self.path_var.get().strip()
         if not os.path.exists(download_dir):
@@ -325,7 +327,7 @@ class DemolitionReturnApp:
             target_wb = self._find_target_workbook(excel)
             if not target_wb:
                 messagebox.showerror("오류", f"현재 엑셀에서 '{TARGET_WORKBOOK_KEYWORD}.xlsx' 파일이 열려있지 않습니다.")
-                return
+                return False
 
             ws = target_wb.Sheets("정리")
             alphabet = string.ascii_letters + string.digits
@@ -343,7 +345,7 @@ class DemolitionReturnApp:
                     "'정리' 시트에서 본부별/지사별 표를 찾지 못했습니다.\n"
                     "시트 레이아웃이 예상과 다른 것 같습니다 (본부별 8~14행, 지사별 19~27행 기준)."
                 )
-                return
+                return False
 
             eda = self._collect_return_eda(target_wb, BRANCH_NAMES)
 
@@ -367,9 +369,11 @@ class DemolitionReturnApp:
                 f.write(html_content)
 
             self._show_result_dialog(html_path, random_user_pwd)
+            return True
 
         except Exception as e:
             messagebox.showerror("실행 오류", f"보고서 생성 중 오류 발생:\n{e}")
+            return False
         finally:
             excel = None  # 읽기 전용 세션이라 Quit는 호출하지 않음 (사용자의 열린 엑셀을 닫지 않기 위함)
 
@@ -762,7 +766,10 @@ class DemolitionReturnApp:
 
         function checkAccess() {{
             const inputVal = document.getElementById("password-input").value.trim();
-            const today = new Date().toISOString().split('T')[0];
+            const now = new Date();
+            // toISOString()은 UTC 기준이라 한국 시간 자정~오전 9시 사이에는 날짜가 하루 전으로 밀리므로
+            // 로컬(브라우저) 날짜의 연/월/일을 직접 조합합니다.
+            const today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
             const errorElem = document.getElementById("error-message");
             if (inputVal !== ADMIN_PWD && today > EXPIRY_DATE) {{
                 errorElem.innerText = "조회 만료 기한(" + EXPIRY_DATE + ")이 경과하여 일반 접근이 불가합니다.";
@@ -828,8 +835,9 @@ class DemolitionReturnApp:
 
         branch_only = [(n, v) for n, v in branch_rows if n != '합계']
         if branch_only:
-            # 누계 반납율(idx 12) 기준
-            rates = [(n, v[12]) for n, v in branch_only if isinstance(v[12], (int, float))]
+            # 누계 반납율(idx 12) 기준. _to_ratio로 정규화해 셀이 0~1 소수든 0~100 숫자든 동일하게 처리합니다
+            # (정규화하지 않으면 _build_summary_table과 값 표기가 어긋날 수 있습니다).
+            rates = [(n, self._to_ratio(v[12])) for n, v in branch_only if self._to_ratio(v[12]) is not None]
             if rates:
                 avg_rate = sum(r for _, r in rates) / len(rates) * 100
                 best_name, best_rate = max(rates, key=lambda x: x[1])
@@ -1064,8 +1072,9 @@ class DemolitionReturnApp:
         eda = eda or {}
         branch_only = [(n, v) for n, v in branch_rows if n != '합계']
         labels = [n for n, v in branch_only]
-        rate_aug = [round((v[6] or 0) * 100, 1) for n, v in branch_only]     # 8월 반납율
-        rate_cum = [round((v[12] or 0) * 100, 1) for n, v in branch_only]    # 누계 반납율
+        # _to_ratio로 정규화해 셀이 0~1 소수든 0~100 숫자든 동일하게 처리합니다.
+        rate_aug = [round((self._to_ratio(v[6]) or 0) * 100, 1) for n, v in branch_only]   # 8월 반납율
+        rate_cum = [round((self._to_ratio(v[12]) or 0) * 100, 1) for n, v in branch_only]  # 누계 반납율
         pending_cum = [v[10] if isinstance(v[10], (int, float)) else 0 for n, v in branch_only]  # 누계 미철거
 
         status_labels = eda.get("status_list", [])

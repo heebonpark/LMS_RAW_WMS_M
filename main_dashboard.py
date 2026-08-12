@@ -8,6 +8,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
 import datetime
+import pythoncom
 
 # 기존 모듈 임포트
 import inventory_html_generator as inv
@@ -88,24 +89,42 @@ class UnifiedDashboardApp:
         self.console.pack(fill="both", expand=True)
         
     def log(self, message):
+        # run_sync/generate_html_report는 백그라운드 스레드에서 실행되므로
+        # Tkinter 위젯 접근은 반드시 root.after()로 메인 스레드에 위임합니다.
+        self.root.after(0, self._log_on_main_thread, message)
+
+    def _log_on_main_thread(self, message):
         self.console.configure(state="normal")
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         self.console.insert("end", f"[{timestamp}] {message}\n")
         self.console.see("end")
         self.console.configure(state="disabled")
-        self.root.update_idletasks()
+
+    def _show_info(self, title, msg):
+        self.root.after(0, lambda: messagebox.showinfo(title, msg))
+
+    def _show_warn(self, title, msg):
+        self.root.after(0, lambda: messagebox.showwarning(title, msg))
+
+    def _fail(self, reason):
+        self.log(f"=== 작업 실패: {reason} ===")
+        self._show_warn("실패", f"{reason}\n진행 상황 로그에서 자세한 오류 내용을 확인하세요.")
 
     def sync_paths(self):
-        # 입력된 경로를 하위 앱들에 동기화
+        # 입력된 경로를 하위 앱들에 동기화 (스레드 시작 전, 메인 스레드에서 호출해야 함)
         path = self.path_var.get()
         self.inv_app.path_var.set(path)
         self.dem_app.path_var.set(path)
-        
+
     def _execute_with_monkeypatch(self, task_name, logic_func):
         """기존 스크립트의 messagebox를 가로채어 콘솔에 출력하도록 몽키패치"""
         import inventory_html_generator as inv_mod
         import demolition_return_html_generator as dem_mod
         from tkinter import simpledialog
+
+        # 이 함수는 threading.Thread의 target으로 실행되는 워커 스레드다.
+        # win32com은 스레드별로 COM 아파트먼트를 초기화해야 하므로 반드시 필요하다.
+        pythoncom.CoInitialize()
 
         original_inv_info = inv_mod.messagebox.showinfo
         original_inv_warn = inv_mod.messagebox.showwarning
@@ -121,7 +140,7 @@ class UnifiedDashboardApp:
         def mock_info(title, msg): self.log(f"[INFO] {title}: {msg}")
         def mock_warn(title, msg): self.log(f"[WARN] {title}: {msg}")
         def mock_err(title, msg): self.log(f"[ERROR] {title}: {msg}")
-        def mock_ask(title, prompt, **kwargs): return "0303" # 자동 관리자 인증
+        def mock_ask(title, prompt, **kwargs): return inv_mod.ADMIN_PASSWORD  # 자동 관리자 인증 (두 모듈의 ADMIN_PASSWORD는 항상 동일)
 
         try:
             # 이동재고 패치
@@ -152,48 +171,68 @@ class UnifiedDashboardApp:
             dem_mod.messagebox.showwarning = original_dem_warn
             dem_mod.messagebox.showerror = original_dem_err
             dem_mod.simpledialog.askstring = original_dem_ask
+            pythoncom.CoUninitialize()
 
     def run_all_logic(self):
-        self.sync_paths()
-        
         self.log(">> 이동재고 1단계 (RAW 반영) 실행 중...")
-        self.inv_app.run_sync()
-        
+        if not self.inv_app.run_sync():
+            self._fail("이동재고 1단계(RAW 반영)에서 실패했습니다.")
+            return
+
         self.log(">> 이동재고 2단계 (보고서 생성) 실행 중...")
-        self.inv_app.generate_html_report()
-        
+        if not self.inv_app.generate_html_report():
+            self._fail("이동재고 2단계(보고서 생성)에서 실패했습니다.")
+            return
+
         self.log(">> 철거반납 1단계 (RAW 반영) 실행 중...")
-        self.dem_app.run_sync()
-        
+        if not self.dem_app.run_sync():
+            self._fail("철거반납 1단계(RAW 반영)에서 실패했습니다.")
+            return
+
         self.log(">> 철거반납 2단계 (보고서 생성) 실행 중...")
-        self.dem_app.generate_html_report()
-        
+        if not self.dem_app.generate_html_report():
+            self._fail("철거반납 2단계(보고서 생성)에서 실패했습니다.")
+            return
+
         self.log("=== 모든 작업이 성공적으로 완료되었습니다 ===")
-        messagebox.showinfo("완료", "모든 작업이 완료되었습니다.\n상세 내용은 진행 상황 로그를 확인하세요.")
+        self._show_info("완료", "모든 작업이 완료되었습니다.\n상세 내용은 진행 상황 로그를 확인하세요.")
 
     def run_all(self):
+        self.sync_paths()
         threading.Thread(target=self._execute_with_monkeypatch, args=("한번에 실행", self.run_all_logic), daemon=True).start()
 
     def run_inventory_logic(self):
-        self.sync_paths()
         self.log(">> 이동재고 1단계 (RAW 반영) 실행 중...")
-        self.inv_app.run_sync()
+        if not self.inv_app.run_sync():
+            self._fail("이동재고 1단계(RAW 반영)에서 실패했습니다.")
+            return
+
         self.log(">> 이동재고 2단계 (보고서 생성) 실행 중...")
-        self.inv_app.generate_html_report()
-        messagebox.showinfo("완료", "이동재고 작업이 완료되었습니다.")
+        if not self.inv_app.generate_html_report():
+            self._fail("이동재고 2단계(보고서 생성)에서 실패했습니다.")
+            return
+
+        self._show_info("완료", "이동재고 작업이 완료되었습니다.")
 
     def run_inventory(self):
+        self.sync_paths()
         threading.Thread(target=self._execute_with_monkeypatch, args=("이동재고 실행", self.run_inventory_logic), daemon=True).start()
 
     def run_demolition_logic(self):
-        self.sync_paths()
         self.log(">> 철거반납 1단계 (RAW 반영) 실행 중...")
-        self.dem_app.run_sync()
+        if not self.dem_app.run_sync():
+            self._fail("철거반납 1단계(RAW 반영)에서 실패했습니다.")
+            return
+
         self.log(">> 철거반납 2단계 (보고서 생성) 실행 중...")
-        self.dem_app.generate_html_report()
-        messagebox.showinfo("완료", "철거반납 작업이 완료되었습니다.")
+        if not self.dem_app.generate_html_report():
+            self._fail("철거반납 2단계(보고서 생성)에서 실패했습니다.")
+            return
+
+        self._show_info("완료", "철거반납 작업이 완료되었습니다.")
 
     def run_demolition(self):
+        self.sync_paths()
         threading.Thread(target=self._execute_with_monkeypatch, args=("철거반납 실행", self.run_demolition_logic), daemon=True).start()
 
 if __name__ == "__main__":

@@ -101,6 +101,9 @@ class AdvancedHTMLGeneratorApp:
 
         excel = None
         try:
+            # CSV는 감사(audit) 기록용으로 남기고, 실제 Excel 쓰기는 메모리 상의
+            # DataFrame을 그대로 사용합니다 (다시 읽지 않음 -> 불필요한 디스크 I/O 제거).
+            df_mon_f = None
             if os.path.exists(monitoring_path):
                 df_mon = pd.read_excel(monitoring_path, sheet_name=0)
                 df_mon_f = df_mon[df_mon['재고상태'].astype(str).str.contains("신품|리퍼", na=False)].iloc[:, :15] \
@@ -108,6 +111,7 @@ class AdvancedHTMLGeneratorApp:
                 df_mon_f.to_csv(os.path.join(download_dir, "이동재고_RAW_안전적용용.csv"),
                                  index=False, encoding='utf-8-sig')
 
+            df_inv_f = None
             if os.path.exists(inventory_path):
                 df_inv = pd.read_excel(inventory_path, sheet_name=0)
                 df_inv_f = df_inv[df_inv['재고상태'].astype(str).str.contains("신품|리퍼", na=False)].iloc[:, :16] \
@@ -122,28 +126,29 @@ class AdvancedHTMLGeneratorApp:
             target_wb = self._find_target_workbook(excel)
             if not target_wb:
                 messagebox.showerror("오류", f"현재 엑셀에서 '{TARGET_WORKBOOK_KEYWORD}.xlsx' 파일이 열려있지 않습니다.")
-                return
+                return False
 
-            mon_csv = os.path.join(download_dir, "이동재고_RAW_안전적용용.csv")
-            if os.path.exists(mon_csv):
-                df_m = pd.read_csv(mon_csv)
+            if df_mon_f is not None:
                 ws_mov = target_wb.Sheets("이동재고 RAW")
                 ws_mov.Range("A:O").ClearContents()
-                mat = [df_m.columns.tolist()] + df_m.values.tolist()
+                # NaN(빈 셀)이 그대로 COM Range.Value에 들어가면 쓰기 오류가 날 수 있어 None으로 치환합니다.
+                clean_mon = df_mon_f.astype(object).where(pd.notnull(df_mon_f), None)
+                mat = [clean_mon.columns.tolist()] + clean_mon.values.tolist()
                 ws_mov.Range(ws_mov.Cells(1, 1), ws_mov.Cells(len(mat), len(mat[0]))).Value = mat
 
-            inv_csv = os.path.join(download_dir, "재고현황_RAW_안전적용용.csv")
-            if os.path.exists(inv_csv):
-                df_i = pd.read_csv(inv_csv)
+            if df_inv_f is not None:
                 ws_inv = target_wb.Sheets("재고현황 RAW")
                 ws_inv.Range("A:P").ClearContents()
-                mat_i = [df_i.columns.tolist()] + df_i.values.tolist()
+                clean_inv = df_inv_f.astype(object).where(pd.notnull(df_inv_f), None)
+                mat_i = [clean_inv.columns.tolist()] + clean_inv.values.tolist()
                 ws_inv.Range(ws_inv.Cells(1, 1), ws_inv.Cells(len(mat_i), len(mat_i[0]))).Value = mat_i
 
             target_wb.RefreshAll()
             messagebox.showinfo("성공", "RAW 데이터 반영 및 모두 새로고침이 성공적으로 완료되었습니다!")
+            return True
         except Exception as e:
             messagebox.showerror("실행 오류", f"처리 중 오류 발생:\n{e}")
+            return False
         finally:
             # 계산모드/화면갱신을 원복하고 COM 객체를 반드시 해제합니다.
             if excel is not None:
@@ -359,7 +364,7 @@ class AdvancedHTMLGeneratorApp:
         pwd = simpledialog.askstring("관리자 인증", "관리자 비밀번호를 입력하세요:", show="*")
         if pwd != ADMIN_PASSWORD:
             messagebox.showerror("인증 실패", "관리자 비밀번호가 일치하지 않습니다.")
-            return
+            return False
 
         download_dir = self.path_var.get().strip()
         if not os.path.exists(download_dir):
@@ -371,7 +376,7 @@ class AdvancedHTMLGeneratorApp:
             target_wb = self._find_target_workbook(excel)
             if not target_wb:
                 messagebox.showerror("오류", f"현재 엑셀에서 '{TARGET_WORKBOOK_KEYWORD}.xlsx' 파일이 열려있지 않습니다.")
-                return
+                return False
 
             ws = target_wb.Sheets("현황정리")
             # 암호학적으로 안전한 난수 생성기(secrets)를 사용합니다.
@@ -437,9 +442,11 @@ class AdvancedHTMLGeneratorApp:
                 f.write(html_content)
 
             self._show_result_dialog(html_path, random_user_pwd)
+            return True
 
         except Exception as e:
             messagebox.showerror("실행 오류", f"보고서 생성 중 오류 발생:\n{e}")
+            return False
         finally:
             excel = None  # COM 참조 해제 (읽기 전용 세션이라 Quit는 호출하지 않음: 사용자의 열린 엑셀을 닫지 않기 위함)
 
@@ -696,7 +703,10 @@ class AdvancedHTMLGeneratorApp:
 
         function checkAccess() {{
             const inputVal = document.getElementById("password-input").value.trim();
-            const today = new Date().toISOString().split('T')[0];
+            const now = new Date();
+            // toISOString()은 UTC 기준이라 한국 시간 자정~오전 9시 사이에는 날짜가 하루 전으로 밀리므로
+            // 로컬(브라우저) 날짜의 연/월/일을 직접 조합합니다.
+            const today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
             const errorElem = document.getElementById("error-message");
 
             if (inputVal !== ADMIN_PWD && today > EXPIRY_DATE) {{
