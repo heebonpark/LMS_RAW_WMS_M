@@ -397,6 +397,32 @@ class DemolitionReturnApp:
             return True
         return False
 
+    def _excel_serial_to_date(self, serial):
+        """엑셀 날짜 일련번호를 datetime으로 변환 (셀 서식이 날짜가 아닌 숫자로 읽힐 때 대비)."""
+        try:
+            return datetime.datetime(1899, 12, 30) + datetime.timedelta(days=float(serial))
+        except (ValueError, OverflowError, TypeError):
+            return None
+
+    def _parse_date_value(self, date_val):
+        """날짜 셀이 datetime/일련번호/문자열 등 다양한 형태로 들어와도 최대한 파싱합니다."""
+        if self._is_excel_error(date_val):
+            return None
+        if isinstance(date_val, (datetime.datetime, datetime.date)):
+            return date_val
+        if isinstance(date_val, (int, float)) and not isinstance(date_val, bool):
+            return self._excel_serial_to_date(date_val)
+        if isinstance(date_val, str):
+            s = date_val.strip()
+            if not s:
+                return None
+            for fmt in ('%Y-%m-%d', '%Y.%m.%d', '%Y/%m/%d', '%y.%m.%d', '%y-%m-%d', '%Y%m%d'):
+                try:
+                    return datetime.datetime.strptime(s[:10].replace(' ', ''), fmt)
+                except ValueError:
+                    continue
+        return None
+
     def _collect_return_eda(self, target_wb, branch_names):
         """'R_지역본부' 시트에서 물품상태·입고예정·변경지사·대상 컬럼을 찾아
         EDA(탐색적 분석)용 집계 데이터를 만듭니다. 시트/컬럼이 없으면 available=False로 반환합니다."""
@@ -444,8 +470,9 @@ class DemolitionReturnApp:
             month_counts = {}
             branch_counts = {}
             branch_status = {}
+            branch_month = {}
             target_counts = {"대상": 0, "제외": 0, "기타": 0}
-            months_seen = set()
+            month_sort_keys = {}  # 표시용 라벨(MM-DD) -> 정렬용 (년,월,일) 튜플
             skipped_na = 0
 
             for row in data:
@@ -461,19 +488,33 @@ class DemolitionReturnApp:
                     continue
 
                 status_str = str(status).strip()
-                month_label = str(month).strip() if month not in (None, "") else "미상"
+
+                # 날짜 셀은 datetime/일련번호/문자열 등 형태가 제각각이라 파싱 후 "MM-DD"로 통일합니다.
+                # (파싱 실패 시에만 원본 값을 그대로 문자열로 표시)
+                month_date = self._parse_date_value(month)
+                if month_date is not None:
+                    month_label = month_date.strftime('%m-%d')
+                    month_sort_keys[month_label] = (month_date.year, month_date.month, month_date.day)
+                elif month not in (None, ""):
+                    month_label = str(month).strip()
+                    month_sort_keys.setdefault(month_label, (9999, 99, 99))
+                else:
+                    month_label = "미상"
+                    month_sort_keys.setdefault(month_label, (9999, 99, 99))
+
                 branch_str = str(branch).strip() if branch not in (None, "") else None
                 if branch_str is not None and (self._is_excel_error(branch_str) or branch_str.startswith('#')):
                     branch_str = None
 
                 status_counts[status_str] = status_counts.get(status_str, 0) + 1
                 month_counts[month_label] = month_counts.get(month_label, 0) + 1
-                months_seen.add(month_label)
 
                 if branch_str:
                     branch_counts[branch_str] = branch_counts.get(branch_str, 0) + 1
                     branch_status.setdefault(branch_str, {})
                     branch_status[branch_str][status_str] = branch_status[branch_str].get(status_str, 0) + 1
+                    branch_month.setdefault(branch_str, {})
+                    branch_month[branch_str][month_label] = branch_month[branch_str].get(month_label, 0) + 1
 
                 if target is not None:
                     t = str(target).strip()
@@ -487,18 +528,12 @@ class DemolitionReturnApp:
             if not status_counts:
                 return result
 
-            def month_key(m):
-                try:
-                    yy, mm = m.split('/')
-                    return (int(yy), int(mm))
-                except (ValueError, AttributeError):
-                    return (999, 999)
-
-            month_order = sorted(months_seen, key=month_key)
+            month_order = sorted(month_counts.keys(), key=lambda m: month_sort_keys.get(m, (9999, 99, 99)))
             status_list = sorted(status_counts.keys(), key=lambda s: status_counts[s], reverse=True)
 
+            # 지사(중앙~원주) 순서로만 정렬합니다. 그 외 지사명(다른 본부/오타 등)은 지사 x 물품상태
+            # 교차표에는 노출하지 않습니다 (branch_counts/branch_status에는 원본 그대로 유지).
             branch_order = [b for b in branch_names if b != '합계' and b in branch_counts]
-            branch_order += sorted(b for b in branch_counts if b not in branch_order)
 
             result.update({
                 "available": True,
@@ -509,6 +544,7 @@ class DemolitionReturnApp:
                 "branch_counts": branch_counts,
                 "branch_order": branch_order,
                 "branch_status": branch_status,
+                "branch_month": branch_month,
                 "target_counts": target_counts,
                 "skipped_na": skipped_na,
             })
@@ -731,6 +767,15 @@ class DemolitionReturnApp:
         .review-list li b {{ color: var(--navy); }}
         .review-list li.tone-warn b {{ color: #b42318; }}
         .review-list li.tone-good b {{ color: #0f9d58; }}
+
+        .eda-tabs {{ display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }}
+        .eda-tab-btn {{
+            border: 1px solid var(--card-border); background: white; color: var(--slate);
+            font-size: 8.8pt; font-weight: 600; padding: 6px 12px; border-radius: 999px;
+            cursor: pointer; transition: all .15s ease;
+        }}
+        .eda-tab-btn:hover {{ border-color: var(--blue-light); color: var(--blue); }}
+        .eda-tab-btn.active {{ background: var(--blue); border-color: var(--blue); color: white; }}
 
         table {{ width: 100%; border-collapse: separate; border-spacing: 0; background: white; font-size: 9.2pt; }}
         .table-wrap {{ border-radius: 12px; overflow-x: auto; box-shadow: 0 1px 2px rgba(15,23,42,0.04); border: 1px solid var(--card-border); }}
@@ -1033,9 +1078,18 @@ class DemolitionReturnApp:
                 cells += f"<td{style}>{v:,.0f}</td>" if v else "<td></td>"
             matrix_rows += f"<tr><td>{esc(b)}</td>{cells}<td><b>{row_total:,.0f}</b></td></tr>"
 
+        # 지사 선택 버튼: 강북강원본부(전체) + 중앙~원주 8개 지사
+        tab_targets = ["강북강원본부"] + [b for b in BRANCH_NAMES if b != '합계']
+        tab_buttons = "".join(
+            f'<button type="button" class="eda-tab-btn{" active" if i == 0 else ""}" '
+            f'data-branch="{esc(b)}" onclick="selectEdaBranch(this)">{esc(b)}</button>'
+            for i, b in enumerate(tab_targets)
+        )
+
         body = f"""
         {na_notice}
         {target_html}
+        <div class="eda-tabs">{tab_buttons}</div>
         <div class="chart-grid">
             <div class="chart-card">
                 <h3>📦 물품상태별 분포</h3>
@@ -1082,10 +1136,44 @@ class DemolitionReturnApp:
         month_labels = eda.get("month_order", [])
         month_values = [eda.get("month_counts", {}).get(m, 0) for m in month_labels]
 
+        # 지사 선택 버튼(강북강원본부 전체 + 중앙~원주)을 클릭했을 때 두 EDA 차트를 갱신하기 위한
+        # 지사별 데이터. 축 라벨(status_labels/month_labels)은 전체 기준으로 고정해 지사를 바꿔도
+        # 차트 축이 흔들리지 않게 합니다.
+        branch_status_map = eda.get("branch_status", {})
+        branch_month_map = eda.get("branch_month", {})
+        status_by_branch = {"강북강원본부": status_values}
+        month_by_branch = {"강북강원본부": month_values}
+        for b in BRANCH_NAMES:
+            if b == '합계':
+                continue
+            bs = branch_status_map.get(b, {})
+            bm = branch_month_map.get(b, {})
+            status_by_branch[b] = [bs.get(s, 0) for s in status_labels]
+            month_by_branch[b] = [bm.get(m, 0) for m in month_labels]
+
         return f"""
     <script>
         Chart.defaults.font.family = "'Pretendard', 'Malgun Gothic', 'Segoe UI', sans-serif";
         Chart.defaults.color = '#475569';
+
+        const EDA_STATUS_BY_BRANCH = {json.dumps(status_by_branch, ensure_ascii=False)};
+        const EDA_MONTH_BY_BRANCH = {json.dumps(month_by_branch, ensure_ascii=False)};
+        let returnStatusChartInstance = null;
+        let returnMonthChartInstance = null;
+
+        function selectEdaBranch(btn) {{
+            const branch = btn.getAttribute('data-branch');
+            document.querySelectorAll('.eda-tabs .eda-tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            if (returnStatusChartInstance && EDA_STATUS_BY_BRANCH[branch]) {{
+                returnStatusChartInstance.data.datasets[0].data = EDA_STATUS_BY_BRANCH[branch];
+                returnStatusChartInstance.update();
+            }}
+            if (returnMonthChartInstance && EDA_MONTH_BY_BRANCH[branch]) {{
+                returnMonthChartInstance.data.datasets[0].data = EDA_MONTH_BY_BRANCH[branch];
+                returnMonthChartInstance.update();
+            }}
+        }}
 
         function initCharts() {{
             const ctxRate = document.getElementById('returnRateChart').getContext('2d');
@@ -1142,7 +1230,7 @@ class DemolitionReturnApp:
 
             const statusCanvas = document.getElementById('returnStatusChart');
             if (statusCanvas) {{
-                new Chart(statusCanvas.getContext('2d'), {{
+                returnStatusChartInstance = new Chart(statusCanvas.getContext('2d'), {{
                     type: 'bar',
                     data: {{
                         labels: {json.dumps(status_labels, ensure_ascii=False)},
@@ -1170,7 +1258,7 @@ class DemolitionReturnApp:
 
             const monthCanvas = document.getElementById('returnMonthChart');
             if (monthCanvas) {{
-                new Chart(monthCanvas.getContext('2d'), {{
+                returnMonthChartInstance = new Chart(monthCanvas.getContext('2d'), {{
                     type: 'bar',
                     data: {{
                         labels: {json.dumps(month_labels, ensure_ascii=False)},
