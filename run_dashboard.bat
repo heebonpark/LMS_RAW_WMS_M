@@ -1,8 +1,7 @@
-ï»¿@echo off
-chcp 65001 >nul
-title ì´ë™ìž¬ê³  ë° ì² ê±°ë°˜ë‚© í†µí•© ëŒ€ì‹œë³´ë“œ
+@echo off
+title ÀÌµ¿Àç°í ¹× Ã¶°Å¹Ý³³ ÅëÇÕ ´ë½Ãº¸µå
 
-rem ---- íŒŒì´ì¬(ë˜ëŠ” py ëŸ°ì²˜)ì´ ìžˆëŠ”ì§€ í™•ì¸ ----
+rem ---- ÆÄÀÌ½ã(¶Ç´Â py ·±Ã³)ÀÌ ÀÖ´ÂÁö È®ÀÎ ----
 set "PYCMD="
 where python >nul 2>nul
 if not errorlevel 1 (
@@ -15,29 +14,29 @@ if not errorlevel 1 (
     goto :python_ready
 )
 
-echo [ì•ˆë‚´] ì´ ì»´í“¨í„°ì— íŒŒì´ì¬ì´ ì„¤ì¹˜ë˜ì–´ ìžˆì§€ ì•Šì•„ ìžë™ìœ¼ë¡œ ì„¤ì¹˜ë¥¼ ì§„í–‰í•©ë‹ˆë‹¤...
-echo        ^(ì¸í„°ë„· ì—°ê²°ì´ í•„ìš”í•˜ë©°, ëª‡ ë¶„ ì •ë„ ê±¸ë¦´ ìˆ˜ ìžˆìŠµë‹ˆë‹¤^)
+echo [¾È³»] ÀÌ ÄÄÇ»ÅÍ¿¡ ÆÄÀÌ½ãÀÌ ¼³Ä¡µÇ¾î ÀÖÁö ¾Ê¾Æ ÀÚµ¿À¸·Î ¼³Ä¡¸¦ ÁøÇàÇÕ´Ï´Ù...
+echo        ^(ÀÎÅÍ³Ý ¿¬°áÀÌ ÇÊ¿äÇÏ¸ç, ¸î ºÐ Á¤µµ °É¸± ¼ö ÀÖ½À´Ï´Ù^)
 echo.
 
 where winget >nul 2>nul
 if errorlevel 1 goto :manual_install
 
-echo wingetìœ¼ë¡œ íŒŒì´ì¬ì„ ì„¤ì¹˜í•©ë‹ˆë‹¤. ìž ì‹œë§Œ ê¸°ë‹¤ë ¤ ì£¼ì„¸ìš”...
+echo wingetÀ¸·Î ÆÄÀÌ½ãÀ» ¼³Ä¡ÇÕ´Ï´Ù. Àá½Ã¸¸ ±â´Ù·Á ÁÖ¼¼¿ä...
 winget install -e --id Python.Python.3.12 --scope user --silent --accept-package-agreements --accept-source-agreements
 goto :recheck
 
 :manual_install
-echo wingetì„ ì‚¬ìš©í•  ìˆ˜ ì—†ì–´ python.orgì—ì„œ ì„¤ì¹˜ íŒŒì¼ì„ ì§ì ‘ ë‚´ë ¤ë°›ìŠµë‹ˆë‹¤...
+echo wingetÀ» »ç¿ëÇÒ ¼ö ¾ø¾î python.org¿¡¼­ ¼³Ä¡ ÆÄÀÏÀ» Á÷Á¢ ³»·Á¹Þ½À´Ï´Ù...
 set "PY_INSTALLER=%TEMP%\python_installer.exe"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe' -OutFile '%PY_INSTALLER%' -UseBasicParsing } catch { exit 1 }"
 if not exist "%PY_INSTALLER%" (
-    echo [ì˜¤ë¥˜] íŒŒì´ì¬ ì„¤ì¹˜ íŒŒì¼ì„ ë‚´ë ¤ë°›ì§€ ëª»í–ˆìŠµë‹ˆë‹¤. ì¸í„°ë„· ì—°ê²°ì„ í™•ì¸í•˜ê±°ë‚˜
-    echo        https://www.python.org ì—ì„œ ì§ì ‘ ì„¤ì¹˜í•œ ë’¤ ì´ íŒŒì¼ì„ ë‹¤ì‹œ ì‹¤í–‰í•´ ì£¼ì„¸ìš”.
+    echo [¿À·ù] ÆÄÀÌ½ã ¼³Ä¡ ÆÄÀÏÀ» ³»·Á¹ÞÁö ¸øÇß½À´Ï´Ù. ÀÎÅÍ³Ý ¿¬°áÀ» È®ÀÎÇÏ°Å³ª
+    echo        https://www.python.org ¿¡¼­ Á÷Á¢ ¼³Ä¡ÇÑ µÚ ÀÌ ÆÄÀÏÀ» ´Ù½Ã ½ÇÇàÇØ ÁÖ¼¼¿ä.
     pause
     exit /b 1
 )
-echo íŒŒì´ì¬ì„ ì„¤ì¹˜í•©ë‹ˆë‹¤. ìž ì‹œë§Œ ê¸°ë‹¤ë ¤ ì£¼ì„¸ìš”...
-echo ^(ëŸ°ì²˜ ë“±ë¡ì„ ìœ„í•´ ê´€ë¦¬ìž ê¶Œí•œ ì°½ì´ ëœ¨ë©´ 'ì˜ˆ'ë¥¼ ëˆŒëŸ¬ ì£¼ì„¸ìš”^)
+echo ÆÄÀÌ½ãÀ» ¼³Ä¡ÇÕ´Ï´Ù. Àá½Ã¸¸ ±â´Ù·Á ÁÖ¼¼¿ä...
+echo ^(·±Ã³ µî·ÏÀ» À§ÇØ °ü¸®ÀÚ ±ÇÇÑ Ã¢ÀÌ ¶ß¸é '¿¹'¸¦ ´­·¯ ÁÖ¼¼¿ä^)
 "%PY_INSTALLER%" /quiet InstallAllUsers=0 PrependPath=1 Include_launcher=1
 del "%PY_INSTALLER%" >nul 2>nul
 
@@ -53,32 +52,32 @@ if not errorlevel 1 (
     goto :install_done
 )
 
-echo [ì˜¤ë¥˜] íŒŒì´ì¬ ì„¤ì¹˜ í›„ì—ë„ ì¸ì‹ë˜ì§€ ì•ŠìŠµë‹ˆë‹¤.
-echo        ì´ ì°½ì„ ë‹«ê³  run_dashboard.batì„ ë‹¤ì‹œ ì‹¤í–‰í•´ ì£¼ì„¸ìš”.
-echo        ^(ê·¸ëž˜ë„ ì•ˆ ë˜ë©´ https://www.python.org ì—ì„œ ìˆ˜ë™ ì„¤ì¹˜í•´ ì£¼ì„¸ìš”^)
+echo [¿À·ù] ÆÄÀÌ½ã ¼³Ä¡ ÈÄ¿¡µµ ÀÎ½ÄµÇÁö ¾Ê½À´Ï´Ù.
+echo        ÀÌ Ã¢À» ´Ý°í run_dashboard.batÀ» ´Ù½Ã ½ÇÇàÇØ ÁÖ¼¼¿ä.
+echo        ^(±×·¡µµ ¾È µÇ¸é https://www.python.org ¿¡¼­ ¼öµ¿ ¼³Ä¡ÇØ ÁÖ¼¼¿ä^)
 pause
 exit /b 1
 
 :install_done
-echo íŒŒì´ì¬ ì„¤ì¹˜ê°€ ì™„ë£Œë˜ì—ˆìŠµë‹ˆë‹¤.
+echo ÆÄÀÌ½ã ¼³Ä¡°¡ ¿Ï·áµÇ¾ú½À´Ï´Ù.
 echo.
 
 :python_ready
-echo í•„ìš”í•œ íŒ¨í‚¤ì§€^(pandas, pywin32^) ì„¤ì¹˜ ì—¬ë¶€ë¥¼ í™•ì¸í•©ë‹ˆë‹¤...
+echo ÇÊ¿äÇÑ ÆÐÅ°Áö^(pandas, pywin32^) ¼³Ä¡ ¿©ºÎ¸¦ È®ÀÎÇÕ´Ï´Ù...
 %PYCMD% -c "import pandas, win32com.client" >nul 2>nul
 if errorlevel 1 (
-    echo í•„ìš”í•œ íŒ¨í‚¤ì§€ë¥¼ ì„¤ì¹˜í•©ë‹ˆë‹¤. ìž ì‹œë§Œ ê¸°ë‹¤ë ¤ ì£¼ì„¸ìš”...
+    echo ÇÊ¿äÇÑ ÆÐÅ°Áö¸¦ ¼³Ä¡ÇÕ´Ï´Ù. Àá½Ã¸¸ ±â´Ù·Á ÁÖ¼¼¿ä...
     %PYCMD% -m pip install --quiet --upgrade pip
     %PYCMD% -m pip install --quiet pandas pywin32
     if errorlevel 1 (
-        echo [ì˜¤ë¥˜] íŒ¨í‚¤ì§€ ì„¤ì¹˜ì— ì‹¤íŒ¨í–ˆìŠµë‹ˆë‹¤. ì¸í„°ë„· ì—°ê²°ì„ í™•ì¸í•´ ì£¼ì„¸ìš”.
+        echo [¿À·ù] ÆÐÅ°Áö ¼³Ä¡¿¡ ½ÇÆÐÇß½À´Ï´Ù. ÀÎÅÍ³Ý ¿¬°áÀ» È®ÀÎÇØ ÁÖ¼¼¿ä.
         pause
         exit /b 1
     )
 )
 
 echo.
-echo ì´ë™ìž¬ê³  ë° ì² ê±°ë°˜ë‚© í†µí•© ëŒ€ì‹œë³´ë“œë¥¼ ì‹¤í–‰í•©ë‹ˆë‹¤...
+echo ÀÌµ¿Àç°í ¹× Ã¶°Å¹Ý³³ ÅëÇÕ ´ë½Ãº¸µå¸¦ ½ÇÇàÇÕ´Ï´Ù...
 echo.
 %PYCMD% main_dashboard.py
 pause
