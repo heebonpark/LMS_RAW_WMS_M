@@ -454,7 +454,7 @@ class AdvancedHTMLGeneratorApp:
         """messagebox는 텍스트를 마우스로 선택/복사할 수 없으므로,
         비밀번호를 복사-붙여넣기 할 수 있는 전용 결과창을 띄웁니다."""
         dlg = tk.Toplevel(self.root)
-        dlg.title("EDA 대시보드 생성 완료")
+        dlg.title("물품재고 현황 리포트 생성 완료")
         dlg.configure(bg="#0f172a")
         dlg.resizable(False, False)
         dlg.grab_set()
@@ -462,7 +462,7 @@ class AdvancedHTMLGeneratorApp:
         frame = tk.Frame(dlg, bg="#0f172a")
         frame.pack(fill="both", expand=True, padx=24, pady=20)
 
-        tk.Label(frame, text="🎨 EDA 대시보드 생성 완료!", font=("Malgun Gothic", 12, "bold"),
+        tk.Label(frame, text="🎨 물품재고 현황 리포트 생성 완료!", font=("Malgun Gothic", 12, "bold"),
                  bg="#0f172a", fg="white").pack(anchor="w", pady=(0, 12))
 
         tk.Label(frame, text="저장 경로", font=("Malgun Gothic", 9, "bold"),
@@ -515,7 +515,7 @@ class AdvancedHTMLGeneratorApp:
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>'26년도 강북 / 강원본부 재고 현황 EDA 대시보드</title>
+    <title>'26년도 강북 / 강원본부 물품재고 현황 리포트</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" rel="stylesheet">
@@ -764,8 +764,8 @@ class AdvancedHTMLGeneratorApp:
         </div>
 
         <div class="header-card">
-            <h1>'26년도 강북 / 강원본부 재고 현황</h1>
-            <p>EDA 분석 기법 및 인터랙티브 필터링이 적용된 프리미엄 시각화 대시보드</p>
+            <h1>'26년도 강북 / 강원본부 물품재고 현황 리포트</h1>
+            <p>EDA 분석 기법 및 인터랙티브 필터링이 적용된 프리미엄 시각화 리포트</p>
         </div>
 
         <div class="filter-container">
