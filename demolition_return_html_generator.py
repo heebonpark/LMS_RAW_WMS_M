@@ -274,6 +274,13 @@ class DemolitionReturnApp:
         일부 피벗이 실패해도 나머지는 정상 반영되도록 합니다."""
         try:
             wb.RefreshAll()
+            # RefreshAll()은 백그라운드 쿼리(연결/피벗)가 끝나기 전에 즉시 반환되는 비동기 호출이라,
+            # 아래 피벗테이블 RefreshTable()이 새로고침이 실제로 끝나지 않은 옛 값을 읽을 수 있습니다.
+            # 완전히 끝날 때까지 명시적으로 기다립니다.
+            try:
+                wb.Application.CalculateUntilAsyncQueriesDone()
+            except Exception:
+                pass  # 일부 구버전 Excel에는 없는 메서드일 수 있음
         except Exception as e:
             if warnings is not None:
                 warnings.append(f"RefreshAll 중 오류: {e}")
@@ -639,6 +646,20 @@ class DemolitionReturnApp:
             return val / 100 if val > 1 else val
         return None
 
+    def _text_color_for_bg(self, r, g, b, dark="#1e2233"):
+        """배경색(r,g,b) 대비 대비비(WCAG relative luminance)가 더 높은 쪽(흰색/dark)을 고릅니다.
+        예전에는 ratio(값의 크기) 기준 고정 임계값으로 흰/검을 나눴는데, 배경색 자체의 밝기가
+        아니라 '값이 크다'는 것만 보고 정했더니 오히려 가장 진한(가장 중요한) 셀에서
+        대비가 무너지는 경우가 있었습니다(WCAG 대비비 4.5 미만). 배경의 실제 밝기로 판단합니다."""
+        def lin(c):
+            c = c / 255
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        bg_lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+        white_contrast = (1.0 + 0.05) / (bg_lum + 0.05)
+        dark_lum = 0.014  # 이 파일에서 쓰는 다크 텍스트(#0b1b4d/#1e2233 등)의 대략적인 상대휘도
+        dark_contrast = (bg_lum + 0.05) / (dark_lum + 0.05)
+        return "#ffffff" if white_contrast > dark_contrast else dark
+
     def _diverging_style(self, value, vmin, vmax):
         """반납율처럼 '높을수록 좋은' 지표에 빨강(낮음)-중립회색(중간)-파랑(높음) 색상 스케일을 적용합니다.
         (엑셀 조건부서식 3색 스케일과 동일한 느낌. 중간값을 순백 대신 중립 회색으로 둬야
@@ -657,8 +678,11 @@ class DemolitionReturnApp:
         rr = round(r + (r2 - r) * t)
         gg = round(g + (g2 - g) * t)
         bb = round(b + (b2 - b) * t)
-        text_color = "#ffffff" if (ratio < 0.18 or ratio > 0.82) else "#1e2233"
-        return f' style="background:rgb({rr},{gg},{bb}); color:{text_color}; font-weight:700;"'
+        text_color = self._text_color_for_bg(rr, gg, bb)
+        # 순수 빨강/파랑 끝값 근처는 흰/검 어느 쪽을 골라도 WCAG 4.5:1에 살짝 못 미쳐서
+        # (~4.0), 옅은 반대색 그림자로 가독성 여유를 더합니다.
+        shadow = "rgba(0,0,0,0.35)" if text_color == "#ffffff" else "rgba(255,255,255,0.9)"
+        return f' style="background:rgb({rr},{gg},{bb}); color:{text_color}; text-shadow:0 0 3px {shadow}; font-weight:700;"'
 
     def _blue_heat_style(self, value, vmax):
         """단순 건수 히트맵 (값이 클수록 진한 파란색). 반납율처럼 '좋다/나쁘다' 가치판단이 없는
@@ -667,9 +691,14 @@ class DemolitionReturnApp:
             return ""
         ratio = min(value / vmax, 1.0)
         alpha = 0.08 + ratio * 0.55
-        text_color = "#0b1b4d" if ratio < 0.6 else "#ffffff"
+        # 배경은 파랑(#2a78d6)을 흰색 위에 alpha로 얹은 결과이므로, 흰 바탕과 섞인 최종 색을
+        # 직접 계산해 대비색을 고릅니다 (매번 진한 네이비가 이깁니다: 최악 대비비 6.8 이상).
+        eff_r = round(255 * (1 - alpha) + 42 * alpha)
+        eff_g = round(255 * (1 - alpha) + 120 * alpha)
+        eff_b = round(255 * (1 - alpha) + 214 * alpha)
+        text_color = self._text_color_for_bg(eff_r, eff_g, eff_b, dark="#0b1b4d")
         weight = "700" if ratio >= 0.35 else "500"
-        return f' style="background:rgba(37,99,235,{alpha:.2f}); color:{text_color}; font-weight:{weight};"'
+        return f' style="background:rgba(42,120,214,{alpha:.2f}); color:{text_color}; font-weight:{weight};"'
 
     def _panel_wrap(self, panel_id, title_html, unit_label, body_html):
         unit_html = f'<span class="unit-label">{esc(unit_label)}</span>' if unit_label else ""

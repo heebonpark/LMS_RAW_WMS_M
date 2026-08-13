@@ -144,6 +144,14 @@ class AdvancedHTMLGeneratorApp:
                 ws_inv.Range(ws_inv.Cells(1, 1), ws_inv.Cells(len(mat_i), len(mat_i[0]))).Value = mat_i
 
             target_wb.RefreshAll()
+            # RefreshAll()은 백그라운드 쿼리(연결/피벗)가 끝나기 전에 즉시 반환되는 비동기 호출입니다.
+            # 이 직후 바로 generate_html_report()가 '현황정리' 시트를 읽으면 새로고침이 실제로는
+            # 끝나지 않은 옛 값을 읽어올 수 있어, 비동기 쿼리가 완전히 끝날 때까지 명시적으로 기다립니다.
+            try:
+                excel.CalculateUntilAsyncQueriesDone()
+            except Exception:
+                pass  # 일부 구버전 Excel에는 없는 메서드일 수 있음
+            self._refresh_summary_sheet(target_wb)
             messagebox.showinfo("성공", "RAW 데이터 반영 및 모두 새로고침이 성공적으로 완료되었습니다!")
             return True
         except Exception as e:
@@ -157,6 +165,33 @@ class AdvancedHTMLGeneratorApp:
                     excel.Calculation = -4105  # xlCalculationAutomatic
                 except Exception:
                     pass
+
+    def _refresh_summary_sheet(self, wb):
+        """RefreshAll()만으로는 피벗테이블이 새로고침되지 않는 경우가 있어(COM 자동화 시 흔한 문제),
+        '현황정리' 시트의 피벗테이블을 개별적으로도 새로고침하고 전체 재계산까지 강제합니다."""
+        try:
+            summary_ws = wb.Sheets("현황정리")
+        except Exception:
+            summary_ws = None
+
+        if summary_ws is not None:
+            try:
+                for pt in summary_ws.PivotTables():
+                    try:
+                        pt.RefreshTable()
+                    except Exception:
+                        pass
+            except Exception:
+                pass  # 피벗테이블이 없는 시트일 수 있음
+            try:
+                summary_ws.Calculate()
+            except Exception:
+                pass
+
+        try:
+            wb.Application.CalculateFull()
+        except Exception:
+            pass
 
     def _find_target_workbook(self, excel):
         for wb in excel.Workbooks:
@@ -181,6 +216,20 @@ class AdvancedHTMLGeneratorApp:
         if isinstance(val, str) and val.strip().startswith('#'):
             return True
         return False
+
+    def _text_color_for_bg(self, r, g, b, dark="#0b1b4d"):
+        """배경색(r,g,b) 대비 대비비(WCAG relative luminance)가 더 높은 쪽(흰색/dark)을 고릅니다.
+        예전에는 ratio(값의 크기) 기준 고정 임계값으로 흰/검을 나눴는데, 배경 자체의 밝기가
+        아니라 '값이 크다'는 것만 보고 정했더니 가장 진한(=가장 중요한) 셀에서 오히려
+        대비가 무너지는 경우가 있었습니다(WCAG 대비비 4.5 미만). 배경의 실제 밝기로 판단합니다."""
+        def lin(c):
+            c = c / 255
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        bg_lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+        white_contrast = (1.0 + 0.05) / (bg_lum + 0.05)
+        dark_lum = 0.014  # 이 파일에서 쓰는 다크 텍스트의 대략적인 상대휘도
+        dark_contrast = (bg_lum + 0.05) / (dark_lum + 0.05)
+        return "#ffffff" if white_contrast > dark_contrast else dark
 
     def _parse_date_value(self, date_val):
         """날짜 셀이 datetime/일련번호/문자열 등 다양한 형태로 들어와도 최대한 파싱합니다."""
@@ -1026,9 +1075,13 @@ class AdvancedHTMLGeneratorApp:
                 return ""
             ratio = min(v / heat_max, 1.0)
             alpha = 0.08 + ratio * 0.55
-            text_color = "#0b1b4d" if ratio < 0.6 else "#ffffff"
+            # 흰 배경 위에 파랑(#2a78d6)을 alpha로 얹은 실제 색을 계산해 대비색을 고릅니다.
+            eff_r = round(255 * (1 - alpha) + 42 * alpha)
+            eff_g = round(255 * (1 - alpha) + 120 * alpha)
+            eff_b = round(255 * (1 - alpha) + 214 * alpha)
+            text_color = self._text_color_for_bg(eff_r, eff_g, eff_b)
             weight = "700" if ratio >= 0.35 else "500"
-            return f' style="background:rgba(37,99,235,{alpha:.2f}); color:{text_color}; font-weight:{weight};"'
+            return f' style="background:rgba(42,120,214,{alpha:.2f}); color:{text_color}; font-weight:{weight};"'
 
         header_cells = "".join(f"<th>{esc(b)}</th>" for b in branch_order) + "<th>합계</th>"
         rows_html = ""
@@ -1166,9 +1219,13 @@ class AdvancedHTMLGeneratorApp:
                 return "", "-"
             ratio = min(rate / 100, 1.0)
             alpha = 0.08 + ratio * 0.55
-            text_color = "#7c2d12" if ratio < 0.6 else "#ffffff"
+            # 흰 배경 위에 주황(#eb6834)을 alpha로 얹은 실제 색을 계산해 대비색을 고릅니다.
+            eff_r = round(255 * (1 - alpha) + 235 * alpha)
+            eff_g = round(255 * (1 - alpha) + 104 * alpha)
+            eff_b = round(255 * (1 - alpha) + 52 * alpha)
+            text_color = self._text_color_for_bg(eff_r, eff_g, eff_b, dark="#7c2d12")
             weight = "700" if ratio >= 0.35 else "500"
-            return f' style="background:rgba(217,119,6,{alpha:.2f}); color:{text_color}; font-weight:{weight};"', f"{rate:.0f}%"
+            return f' style="background:rgba(235,104,52,{alpha:.2f}); color:{text_color}; font-weight:{weight};"', f"{rate:.0f}%"
 
         header_cells = "".join(f"<th>{esc(t)}</th>" for t in req_types) + "<th>전체</th>"
         body_rows = ""
